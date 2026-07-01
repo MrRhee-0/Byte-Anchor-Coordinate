@@ -6,6 +6,7 @@ import sys
 
 
 FAILURE_RECONSTRUCTION_MISMATCH = "RECONSTRUCTION_MISMATCH"
+FAILURE_PACKET_OVERCONSTRAINT = "PACKET_OVERCONSTRAINT"
 
 
 class DecodeError(Exception):
@@ -99,31 +100,25 @@ def lambda_g_h(data):
     return lambda_values, g_values, h_values
 
 
-def h_groups_from_values(h_values):
-    groups = []
-    index = 0
-    while index < len(h_values):
-        value = h_values[index]
-        count = 1
-        index += 1
-        while index < len(h_values) and h_values[index] == value:
-            count += 1
-            index += 1
-        groups.append({"value": value, "count": count})
-    return groups
+def all_equal(values):
+    if len(values) == 0:
+        return True
+    first = values[0]
+    for value in values:
+        if value != first:
+            return False
+    return True
 
 
-def coordinate_field_report(n, b0, g0, h_values):
-    groups = h_groups_from_values(h_values)
+def coordinate_field_report(n, b0, g0, h_values, relation_name, relation_value_count):
     return {
         "lambda_length": n,
         "b0": b0,
         "g0": g0,
         "g_value_count": max(0, n - 1),
         "h_value_count": max(0, n - 2),
-        "h_group_count": len(groups),
-        "h_first_groups": groups[:8],
-        "h_last_groups": groups[-8:] if groups else [],
+        "coordinate_relation": relation_name,
+        "coordinate_relation_value_count": relation_value_count,
     }
 
 
@@ -134,22 +129,29 @@ def encode_coordinate(data):
     output.extend(encode_varuint(n))
 
     if n == 0:
-        return bytes(output), coordinate_field_report(n, None, None, h_values)
+        return bytes(output), coordinate_field_report(n, None, None, h_values, "EMPTY_LAMBDA", 0)
 
     b0 = lambda_values[0]
     output.append(b0)
 
-    if n == 1:
-        return bytes(output), coordinate_field_report(n, b0, None, h_values)
+    if n == 1 or all_equal(lambda_values):
+        return bytes(output), coordinate_field_report(n, b0, None, h_values, "CONSTANT_LAMBDA", 1)
 
     g0 = g_values[0]
-    output.extend(encode_signed(g0))
 
-    for group in h_groups_from_values(h_values):
-        output.extend(encode_signed(group["value"]))
-        output.extend(encode_varuint(group["count"]))
+    if all_equal(g_values):
+        output.extend(encode_signed(g0))
+        return bytes(output), coordinate_field_report(n, b0, g0, h_values, "CONSTANT_G", 1)
 
-    return bytes(output), coordinate_field_report(n, b0, g0, h_values)
+    if all_equal(h_values):
+        output.extend(encode_signed(g0))
+        output.extend(encode_signed(h_values[0]))
+        return bytes(output), coordinate_field_report(n, b0, g0, h_values, "CONSTANT_H", 1)
+
+    for value in g_values:
+        output.extend(encode_signed(value))
+
+    return bytes(output), coordinate_field_report(n, b0, g0, h_values, "G_SEQUENCE", len(g_values))
 
 
 def ensure_byte(value):
@@ -170,6 +172,17 @@ def reconstruct_from_h(n, b0, g0, h_values):
     return bytes(values)
 
 
+def reconstruct_from_g(n, b0, g_values):
+    if n == 0:
+        return b""
+    if len(g_values) != n - 1:
+        raise DecodeError("G length does not match Lambda length")
+    values = [b0]
+    for value in g_values:
+        values.append(ensure_byte(values[-1] + value))
+    return bytes(values)
+
+
 def decode_coordinate(data):
     reader = Reader(data)
     n = reader.read_varuint()
@@ -179,44 +192,59 @@ def decode_coordinate(data):
             raise DecodeError("trailing bytes after coordinate")
         return {
             "data": b"",
-            "coordinate_fields": coordinate_field_report(n, None, None, []),
+            "coordinate_fields": coordinate_field_report(n, None, None, [], "EMPTY_LAMBDA", 0),
         }
 
     b0 = reader.read_byte()
+    relation_values = []
+    while reader.remaining() > 0:
+        relation_values.append(reader.read_signed())
+
     if n == 1:
-        if reader.remaining() != 0:
+        if len(relation_values) != 0:
             raise DecodeError("trailing bytes after coordinate")
         return {
             "data": bytes([b0]),
-            "coordinate_fields": coordinate_field_report(n, b0, None, []),
+            "coordinate_fields": coordinate_field_report(n, b0, None, [], "CONSTANT_LAMBDA", 1),
         }
 
-    g0 = reader.read_signed()
-    h_values = []
-    expected_h_count = n - 2
+    if len(relation_values) == 0:
+        decoded = bytes([b0] * n)
+        return {
+            "data": decoded,
+            "coordinate_fields": coordinate_field_report(n, b0, None, [], "CONSTANT_LAMBDA", 1),
+        }
 
-    while len(h_values) < expected_h_count:
-        value = reader.read_signed()
-        count = reader.read_varuint()
-        if count == 0:
-            raise DecodeError("zero-count H group")
-        if len(h_values) + count > expected_h_count:
-            raise DecodeError("H group exceeds expected length")
-        for _ in range(count):
-            h_values.append(value)
+    g0 = relation_values[0]
 
-    if reader.remaining() != 0:
-        raise DecodeError("trailing bytes after coordinate")
+    if len(relation_values) == 1:
+        decoded = reconstruct_from_g(n, b0, [g0] * (n - 1))
+        return {
+            "data": decoded,
+            "coordinate_fields": coordinate_field_report(n, b0, g0, [], "CONSTANT_G", 1),
+        }
 
-    decoded = reconstruct_from_h(n, b0, g0, h_values)
-    return {
-        "data": decoded,
-        "coordinate_fields": coordinate_field_report(n, b0, g0, h_values),
-    }
+    if len(relation_values) == 2 and n >= 3:
+        h0 = relation_values[1]
+        h_values = [h0] * max(0, n - 2)
+        decoded = reconstruct_from_h(n, b0, g0, h_values)
+        return {
+            "data": decoded,
+            "coordinate_fields": coordinate_field_report(n, b0, g0, h_values, "CONSTANT_H", 1),
+        }
+
+    if len(relation_values) == n - 1:
+        decoded = reconstruct_from_g(n, b0, relation_values)
+        return {
+            "data": decoded,
+            "coordinate_fields": coordinate_field_report(n, b0, relation_values[0], [], "G_SEQUENCE", len(relation_values)),
+        }
+
+    raise DecodeError("coordinate relation does not match Lambda length")
 
 
-def status_for(exact_match, length_equal, sha_equal):
-    if exact_match and length_equal and sha_equal:
+def status_for(exact_match, length_equal, sha_equal, residual_zero, size_smaller):
+    if exact_match and length_equal and sha_equal and residual_zero and size_smaller:
         return "CLOSED"
     return "FAILED"
 
@@ -253,6 +281,14 @@ def residual_report(original_data, decoded):
     }
 
 
+def failure_class_for(exact_match, length_equal, sha_equal, residual_zero, size_smaller):
+    if exact_match and length_equal and sha_equal and residual_zero and not size_smaller:
+        return FAILURE_PACKET_OVERCONSTRAINT
+    if exact_match and length_equal and sha_equal and residual_zero and size_smaller:
+        return None
+    return FAILURE_RECONSTRUCTION_MISMATCH
+
+
 def pack_report(input_path, output_path, original_data, coordinate, decoded_info, wrote):
     decoded = decoded_info["data"]
     original_sha = sha256_hex(original_data)
@@ -260,17 +296,17 @@ def pack_report(input_path, output_path, original_data, coordinate, decoded_info
     exact_match = decoded == original_data
     length_equal = len(decoded) == len(original_data)
     sha_equal = decoded_sha == original_sha
-    status = status_for(exact_match, length_equal, sha_equal)
-    failure_class = None
-    if status != "CLOSED":
-        failure_class = FAILURE_RECONSTRUCTION_MISMATCH
+    residual = residual_report(original_data, decoded)
+    size_smaller = len(coordinate) < len(original_data)
+    status = status_for(exact_match, length_equal, sha_equal, residual["residual_zero"], size_smaller)
+    failure_class = failure_class_for(exact_match, length_equal, sha_equal, residual["residual_zero"], size_smaller)
     report = {
         "input_path": str(input_path),
         "output_path": str(output_path),
         "original_size": len(original_data),
         "coordinate_size": len(coordinate),
         "ratio": ratio_for(len(coordinate), len(original_data)),
-        "size_smaller_than_carrier": len(coordinate) < len(original_data),
+        "size_smaller_than_carrier": size_smaller,
         "original_sha256": original_sha,
         "decoded_sha256": decoded_sha,
         "decoded_size": len(decoded),
@@ -282,7 +318,7 @@ def pack_report(input_path, output_path, original_data, coordinate, decoded_info
         "status": status,
         "failure_class": failure_class,
     }
-    report.update(residual_report(original_data, decoded))
+    report.update(residual)
     return report
 
 
@@ -306,13 +342,16 @@ def verify_report(input_path, coordinate_path, original_data, coordinate, decode
     exact_match = decoded == original_data
     length_equal = len(decoded) == len(original_data)
     sha_equal = decoded_sha == original_sha
+    residual = residual_report(original_data, decoded)
+    size_smaller = len(coordinate) < len(original_data)
+    status = status_for(exact_match, length_equal, sha_equal, residual["residual_zero"], size_smaller)
     report = {
         "input_path": str(input_path),
         "coordinate_path": str(coordinate_path),
         "original_size": len(original_data),
         "coordinate_size": len(coordinate),
         "ratio": ratio_for(len(coordinate), len(original_data)),
-        "size_smaller_than_carrier": len(coordinate) < len(original_data),
+        "size_smaller_than_carrier": size_smaller,
         "original_sha256": original_sha,
         "decoded_sha256": decoded_sha,
         "decoded_size": len(decoded),
@@ -320,9 +359,10 @@ def verify_report(input_path, coordinate_path, original_data, coordinate, decode
         "length_equal": length_equal,
         "sha_equal": sha_equal,
         "coordinate_fields": decoded_info["coordinate_fields"],
-        "status": status_for(exact_match, length_equal, sha_equal),
+        "status": status,
+        "failure_class": failure_class_for(exact_match, length_equal, sha_equal, residual["residual_zero"], size_smaller),
     }
-    report.update(residual_report(original_data, decoded))
+    report.update(residual)
     return report
 
 
@@ -337,7 +377,14 @@ def pack_command(args):
     coordinate, coordinate_fields = encode_coordinate(original_data)
     decoded_info = decode_coordinate(coordinate)
     decoded_info["coordinate_fields"] = coordinate_fields
-    closed = decoded_info["data"] == original_data
+    decoded = decoded_info["data"]
+    residual = residual_report(original_data, decoded)
+    closed = (
+        decoded == original_data
+        and sha256_hex(decoded) == sha256_hex(original_data)
+        and residual["residual_zero"]
+        and len(coordinate) < len(original_data)
+    )
 
     if closed:
         write_bytes(output_path, coordinate)
