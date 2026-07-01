@@ -6,6 +6,7 @@ import sys
 
 
 FAILURE_RECONSTRUCTION_MISMATCH = "RECONSTRUCTION_MISMATCH"
+FAILURE_NO_LAWFUL_Q_C = "NO_LAWFUL_Q_C"
 FAILURE_PACKET_OVERCONSTRAINT = "PACKET_OVERCONSTRAINT"
 
 
@@ -110,15 +111,34 @@ def all_equal(values):
     return True
 
 
-def coordinate_field_report(n, b0, g0, h_values, relation_name, relation_value_count):
+def angle_node_start(n):
+    if n < 3:
+        return None
+    return 2
+
+
+def angle_node_end(n):
+    if n < 3:
+        return None
+    return n - 1
+
+
+def coordinate_field_report(n, b0, g0, angle_node_values, relation_name, relation_value_count):
     return {
         "lambda_length": n,
-        "b0": b0,
-        "g0": g0,
+        "position_anchor_start": 1 if n > 0 else None,
+        "position_anchor_end": n if n > 0 else None,
+        "lambda_anchor": b0,
+        "g_anchor": g0,
+        "angle_node_start": angle_node_start(n),
+        "angle_node_end": angle_node_end(n),
+        "angle_node_count": max(0, n - 2),
+        "angle_node_values_in_q": angle_node_values,
         "g_value_count": max(0, n - 1),
         "h_value_count": max(0, n - 2),
         "coordinate_relation": relation_name,
         "coordinate_relation_value_count": relation_value_count,
+        "decoder_relation": "Lambda_m = Lambda_1 + (m-1)G_1 + sum((m-1-k)H_k)",
     }
 
 
@@ -129,29 +149,26 @@ def encode_coordinate(data):
     output.extend(encode_varuint(n))
 
     if n == 0:
-        return bytes(output), coordinate_field_report(n, None, None, h_values, "EMPTY_LAMBDA", 0)
+        return bytes(output), coordinate_field_report(n, None, None, [], "EMPTY_LAMBDA", 0)
 
     b0 = lambda_values[0]
     output.append(b0)
 
     if n == 1 or all_equal(lambda_values):
-        return bytes(output), coordinate_field_report(n, b0, None, h_values, "CONSTANT_LAMBDA", 1)
+        return bytes(output), coordinate_field_report(n, b0, None, [], "CONSTANT_LAMBDA", 1)
 
     g0 = g_values[0]
 
     if all_equal(g_values):
         output.extend(encode_signed(g0))
-        return bytes(output), coordinate_field_report(n, b0, g0, h_values, "CONSTANT_G", 1)
+        return bytes(output), coordinate_field_report(n, b0, g0, [], "CONSTANT_G", 1)
 
     if all_equal(h_values):
         output.extend(encode_signed(g0))
         output.extend(encode_signed(h_values[0]))
-        return bytes(output), coordinate_field_report(n, b0, g0, h_values, "CONSTANT_H", 1)
+        return bytes(output), coordinate_field_report(n, b0, g0, [h_values[0]], "CONSTANT_ANGLENODE_H", 1)
 
-    for value in g_values:
-        output.extend(encode_signed(value))
-
-    return bytes(output), coordinate_field_report(n, b0, g0, h_values, "G_SEQUENCE", len(g_values))
+    return None, coordinate_field_report(n, b0, g0, [], "UNRESOLVED_ANGLENODE_Q", 0)
 
 
 def ensure_byte(value):
@@ -160,15 +177,20 @@ def ensure_byte(value):
     return value
 
 
-def reconstruct_from_h(n, b0, g0, h_values):
+def reconstruct_from_angle_nodes(n, b0, g0, angle_node_values):
     if n == 0:
         return b""
+    if n == 1:
+        return bytes([b0])
+    if len(angle_node_values) != max(0, n - 2):
+        raise DecodeError("AngleNode count does not match Lambda length")
     values = [b0]
     g_current = g0
-    for index in range(1, n):
+    for position in range(2, n + 1):
         values.append(ensure_byte(values[-1] + g_current))
-        if index - 1 < len(h_values):
-            g_current = g_current + h_values[index - 1]
+        angle_index = position - 2
+        if angle_index < len(angle_node_values):
+            g_current = g_current + angle_node_values[angle_index]
     return bytes(values)
 
 
@@ -226,21 +248,14 @@ def decode_coordinate(data):
 
     if len(relation_values) == 2 and n >= 3:
         h0 = relation_values[1]
-        h_values = [h0] * max(0, n - 2)
-        decoded = reconstruct_from_h(n, b0, g0, h_values)
+        angle_node_values = [h0] * max(0, n - 2)
+        decoded = reconstruct_from_angle_nodes(n, b0, g0, angle_node_values)
         return {
             "data": decoded,
-            "coordinate_fields": coordinate_field_report(n, b0, g0, h_values, "CONSTANT_H", 1),
+            "coordinate_fields": coordinate_field_report(n, b0, g0, [h0], "CONSTANT_ANGLENODE_H", 1),
         }
 
-    if len(relation_values) == n - 1:
-        decoded = reconstruct_from_g(n, b0, relation_values)
-        return {
-            "data": decoded,
-            "coordinate_fields": coordinate_field_report(n, b0, relation_values[0], [], "G_SEQUENCE", len(relation_values)),
-        }
-
-    raise DecodeError("coordinate relation does not match Lambda length")
+    raise DecodeError("coordinate carries expanded or invalid relation burden")
 
 
 def status_for(exact_match, length_equal, sha_equal, residual_zero, size_smaller):
@@ -287,6 +302,30 @@ def failure_class_for(exact_match, length_equal, sha_equal, residual_zero, size_
     if exact_match and length_equal and sha_equal and residual_zero and size_smaller:
         return None
     return FAILURE_RECONSTRUCTION_MISMATCH
+
+
+def unresolved_pack_report(input_path, output_path, original_data, coordinate_fields):
+    return {
+        "input_path": str(input_path),
+        "output_path": str(output_path),
+        "original_size": len(original_data),
+        "coordinate_size": None,
+        "ratio": None,
+        "size_smaller_than_carrier": False,
+        "original_sha256": sha256_hex(original_data),
+        "decoded_sha256": None,
+        "decoded_size": None,
+        "exact_match": False,
+        "length_equal": False,
+        "sha_equal": False,
+        "coordinate_fields": coordinate_fields,
+        "artifact_written": False,
+        "status": "FAILED",
+        "failure_class": FAILURE_NO_LAWFUL_Q_C,
+        "residual_zero": None,
+        "residual_nonzero_count": None,
+        "residual_abs_sum": None,
+    }
 
 
 def pack_report(input_path, output_path, original_data, coordinate, decoded_info, wrote):
@@ -375,6 +414,12 @@ def pack_command(args):
     output_path = Path(args.output_bac_path)
     original_data = read_input_bytes(input_path)
     coordinate, coordinate_fields = encode_coordinate(original_data)
+    if coordinate is None:
+        output_path.unlink(missing_ok=True)
+        report = unresolved_pack_report(input_path, output_path, original_data, coordinate_fields)
+        print_report(report)
+        return 1
+
     decoded_info = decode_coordinate(coordinate)
     decoded_info["coordinate_fields"] = coordinate_fields
     decoded = decoded_info["data"]
