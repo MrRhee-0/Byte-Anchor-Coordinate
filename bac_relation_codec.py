@@ -86,6 +86,36 @@ def sha256_bytes(data):
     return hashlib.sha256(data).digest()
 
 
+def validate_decoded_packet(
+    decoded,
+    original_length,
+    original_sha256,
+    root_rule_id,
+    rules,
+    h_value_count,
+    relation_packet_length,
+    reader,
+):
+    if len(decoded) != original_length:
+        raise DecodeError("decoded length does not match header")
+
+    if sha256_bytes(decoded) != original_sha256:
+        raise DecodeError("decoded sha256 does not match header")
+
+    if reader.remaining() != 0:
+        raise DecodeError("trailing bytes after BACR payload")
+
+    return {
+        "data": decoded,
+        "original_length": original_length,
+        "original_sha256": original_sha256,
+        "root_rule_id": root_rule_id,
+        "rules": rules,
+        "h_value_count": h_value_count,
+        "relation_packet_size": relation_packet_length,
+    }
+
+
 def encode_varuint(value):
     if value < 0:
         raise ValueError("varuint cannot encode a negative integer")
@@ -588,21 +618,33 @@ def decode_rule(reader):
     raise DecodeError("unknown rule operation")
 
 
-def expand_rule(rule_id, rules, memo):
+def expand_rule(rule_id, rules, memo, active=None):
+    if active is None:
+        active = set()
+
     existing = memo.get(rule_id)
     if existing is not None:
         return list(existing)
+
     if rule_id < 0 or rule_id >= len(rules):
         raise DecodeError("rule id out of range")
+
+    if rule_id in active:
+        raise DecodeError("cyclic rule reference")
+
+    active.add(rule_id)
     rule = rules[rule_id]
     op_tag = rule[0]
     output = []
+
     if op_tag == OP_CONST:
         for _ in range(rule[2]):
             output.append(rule[1])
+
     elif op_tag == OP_LINE:
         for index in range(rule[3]):
             output.append(rule[1] + (index * rule[2]))
+
     elif op_tag == OP_CURVE:
         value = rule[1]
         step = rule[2]
@@ -611,20 +653,26 @@ def expand_rule(rule_id, rules, memo):
             if index + 1 < rule[4]:
                 value = value + step
                 step = step + rule[3]
+
     elif op_tag == OP_PERIOD:
         if len(rule[1]) == 0 and rule[2] > 0:
             raise DecodeError("non-empty period expansion has empty period")
         for index in range(rule[2]):
             output.append(rule[1][index % len(rule[1])])
+
     elif op_tag == OP_CALL:
-        child = expand_rule(rule[1], rules, memo)
+        child = expand_rule(rule[1], rules, memo, active)
         for _ in range(rule[2]):
             output.extend(child)
+
     elif op_tag == OP_JOIN:
         for child_id in rule[1]:
-            output.extend(expand_rule(child_id, rules, memo))
+            output.extend(expand_rule(child_id, rules, memo, active))
+
     else:
         raise DecodeError("unknown rule operation")
+
+    active.remove(rule_id)
     memo[rule_id] = list(output)
     return output
 
@@ -678,80 +726,101 @@ def decode_bacr(data):
     reader = Reader(data)
     if reader.read_bytes(4) != MAGIC:
         raise DecodeError("bad magic")
+
     version = reader.read_byte()
     if version != VERSION:
         raise DecodeError("unsupported version")
+
     original_length = reader.read_varuint()
     original_sha256 = reader.read_bytes(32)
     relation_packet_length = reader.read_varuint()
 
     root_rule_id = None
     rules = []
-    h_values = []
+
     if original_length == 0:
+        if relation_packet_length != 0:
+            raise DecodeError("empty carrier has nonzero relation packet length")
         marker = reader.read_byte()
         if marker != 0:
             raise DecodeError("bad empty carrier marker")
-    elif original_length == 1:
+        decoded = b""
+        return validate_decoded_packet(
+            decoded,
+            original_length,
+            original_sha256,
+            root_rule_id,
+            rules,
+            0,
+            relation_packet_length,
+            reader,
+        )
+
+    if original_length == 1:
+        if relation_packet_length != 0:
+            raise DecodeError("one-byte carrier has nonzero relation packet length")
         b0 = reader.read_byte()
         decoded = bytes([b0])
-        return {
-            "data": decoded,
-            "original_length": original_length,
-            "original_sha256": original_sha256,
-            "root_rule_id": root_rule_id,
-            "rules": rules,
-            "h_value_count": 0,
-            "relation_packet_size": relation_packet_length,
-        }
-    elif original_length == 2:
+        return validate_decoded_packet(
+            decoded,
+            original_length,
+            original_sha256,
+            root_rule_id,
+            rules,
+            0,
+            relation_packet_length,
+            reader,
+        )
+
+    if original_length == 2:
+        if relation_packet_length != 0:
+            raise DecodeError("two-byte carrier has nonzero relation packet length")
         b0 = reader.read_byte()
         g0 = reader.read_signed()
         decoded = reconstruct_from_h(b0, g0, [], original_length)
-        return {
-            "data": decoded,
-            "original_length": original_length,
-            "original_sha256": original_sha256,
-            "root_rule_id": root_rule_id,
-            "rules": rules,
-            "h_value_count": 0,
-            "relation_packet_size": relation_packet_length,
-        }
-    else:
-        b0 = reader.read_byte()
-        g0 = reader.read_signed()
-        relation_bytes = reader.read_bytes(relation_packet_length)
-        relation_reader = Reader(relation_bytes)
-        root_rule_id = relation_reader.read_varuint()
-        rule_count = relation_reader.read_varuint()
-        for _ in range(rule_count):
-            rules.append(decode_rule(relation_reader))
-        if relation_reader.remaining() != 0:
-            raise DecodeError("trailing relation packet bytes")
-        h_values = expand_rule(root_rule_id, rules, {})
-        expected_h_count = original_length - 2
-        if len(h_values) != expected_h_count:
-            raise DecodeError("expanded H length mismatch")
-        decoded = reconstruct_from_h(b0, g0, h_values, original_length)
-        return {
-            "data": decoded,
-            "original_length": original_length,
-            "original_sha256": original_sha256,
-            "root_rule_id": root_rule_id,
-            "rules": rules,
-            "h_value_count": len(h_values),
-            "relation_packet_size": relation_packet_length,
-        }
+        return validate_decoded_packet(
+            decoded,
+            original_length,
+            original_sha256,
+            root_rule_id,
+            rules,
+            0,
+            relation_packet_length,
+            reader,
+        )
 
-    return {
-        "data": b"",
-        "original_length": original_length,
-        "original_sha256": original_sha256,
-        "root_rule_id": root_rule_id,
-        "rules": rules,
-        "h_value_count": 0,
-        "relation_packet_size": relation_packet_length,
-    }
+    b0 = reader.read_byte()
+    g0 = reader.read_signed()
+    relation_bytes = reader.read_bytes(relation_packet_length)
+    relation_reader = Reader(relation_bytes)
+
+    root_rule_id = relation_reader.read_varuint()
+    rule_count = relation_reader.read_varuint()
+
+    for _ in range(rule_count):
+        rules.append(decode_rule(relation_reader))
+
+    if relation_reader.remaining() != 0:
+        raise DecodeError("trailing relation packet bytes")
+
+    h_values = expand_rule(root_rule_id, rules, {})
+    expected_h_count = original_length - 2
+
+    if len(h_values) != expected_h_count:
+        raise DecodeError("expanded H length mismatch")
+
+    decoded = reconstruct_from_h(b0, g0, h_values, original_length)
+
+    return validate_decoded_packet(
+        decoded,
+        original_length,
+        original_sha256,
+        root_rule_id,
+        rules,
+        len(h_values),
+        relation_packet_length,
+        reader,
+    )
 
 
 def rule_counts_by_type(rules):
@@ -812,6 +881,42 @@ def build_report(input_path, output_path, original_data, bacr_data, decoded_info
     }
 
 
+def build_unpack_report(input_path, output_path, bacr_data, decoded_info):
+    decoded = decoded_info["data"]
+    decoded_sha = sha256_hex(decoded)
+    header_sha = decoded_info["original_sha256"].hex()
+    sha_equal = decoded_sha == header_sha
+    length_equal = len(decoded) == decoded_info["original_length"]
+
+    return {
+        "input_path": str(input_path),
+        "output_path": str(output_path),
+        "original_size": decoded_info["original_length"],
+        "bacr_size": len(bacr_data),
+        "ratio": len(bacr_data) / decoded_info["original_length"]
+        if decoded_info["original_length"] != 0
+        else None,
+        "original_sha256": header_sha,
+        "decoded_sha256": decoded_sha,
+        "decoded_size": len(decoded),
+        "exact_match": sha_equal and length_equal,
+        "length_equal": length_equal,
+        "sha_equal": sha_equal,
+        "status": status_for(
+            sha_equal and length_equal,
+            length_equal,
+            sha_equal,
+            len(bacr_data),
+            decoded_info["original_length"],
+        ),
+        "h_value_count": decoded_info["h_value_count"],
+        "root_rule_id": decoded_info["root_rule_id"],
+        "rule_count": len(decoded_info["rules"]),
+        "rule_counts_by_type": rule_counts_by_type(decoded_info["rules"]),
+        "relation_packet_size": decoded_info["relation_packet_size"],
+    }
+
+
 def print_report(report):
     print(json.dumps(report, indent=2))
 
@@ -835,10 +940,9 @@ def unpack_command(args):
     decoded_info = decode_bacr(bacr_data)
     decoded = decoded_info["data"]
     write_bytes(output_path, decoded)
-    report = build_report(
+    report = build_unpack_report(
         args.input_bacr_path,
         args.output_path,
-        decoded,
         bacr_data,
         decoded_info,
     )
