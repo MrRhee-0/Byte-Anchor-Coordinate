@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 
-SNAPSHOT_RELATION = b'import argparse\nfrom datetime import datetime\nimport hashlib\nimport json\nfrom pathlib import Path\n\n\ndef parse_non_negative_decimal(text):\n    if text == "" or not all(character in "0123456789" for character in text):\n        raise argparse.ArgumentTypeError(\n            f"{text!r} is not a base-10 integer greater than or equal to 0"\n        )\n    return int(text, 10)\n\n\ndef byte_hex(value):\n    return f"{value:02x}"\n\n\ndef build_byte_frequency(data):\n    frequencies = [0] * 256\n    for value in data:\n        frequencies[value] += 1\n    return frequencies\n\n\ndef build_offset_value_sample(data, limit):\n    return [\n        {\n            "offset": offset,\n            "value": data[offset],\n            "hex": byte_hex(data[offset]),\n        }\n        for offset in range(min(limit, len(data)))\n    ]\n\n\ndef build_adjacent_byte_sample(data, limit):\n    pair_count = max(0, min(limit, len(data) - 1))\n    entries = []\n    for offset in range(pair_count):\n        value = data[offset]\n        next_value = data[offset + 1]\n        entries.append(\n            {\n                "offset": offset,\n                "value": value,\n                "hex": byte_hex(value),\n                "next_offset": offset + 1,\n                "next_value": next_value,\n                "next_hex": byte_hex(next_value),\n                "pair_hex": byte_hex(value) + byte_hex(next_value),\n            }\n        )\n    return entries\n\n\ndef build_byte_delta_sample(data, limit):\n    pair_count = max(0, min(limit, len(data) - 1))\n    entries = []\n    for offset in range(pair_count):\n        value = data[offset]\n        next_value = data[offset + 1]\n        entries.append(\n            {\n                "offset": offset,\n                "value": value,\n                "next_offset": offset + 1,\n                "next_value": next_value,\n                "delta": next_value - value,\n            }\n        )\n    return entries\n\n\ndef build_report(path, data, sample, adjacent_sample, delta_sample):\n    source_path = Path(path)\n    frequencies = build_byte_frequency(data)\n    report = {\n        "name": source_path.name,\n        "suffix": source_path.suffix,\n        "byte_length": len(data),\n        "sha256": hashlib.sha256(data).hexdigest(),\n        "first_64_hex": data[:64].hex(),\n        "last_64_hex": data[-64:].hex(),\n        "distinct_byte_count": sum(1 for count in frequencies if count > 0),\n        "byte_frequency_0_to_255": frequencies,\n        "empty": len(data) == 0,\n        "timestamp_local_iso8601": datetime.now().astimezone().isoformat(),\n    }\n\n    if sample is not None:\n        report["offset_value_sample"] = build_offset_value_sample(data, sample)\n    if adjacent_sample is not None:\n        report["adjacent_byte_sample"] = build_adjacent_byte_sample(\n            data, adjacent_sample\n        )\n    if delta_sample is not None:\n        report["byte_delta_sample"] = build_byte_delta_sample(data, delta_sample)\n\n    return report\n\n\ndef parse_args():\n    parser = argparse.ArgumentParser(\n        description="Read a target file as raw bytes and emit a JSON report."\n    )\n    parser.add_argument("path", type=Path)\n    parser.add_argument("--out", dest="out", type=Path)\n    parser.add_argument("--sample", type=parse_non_negative_decimal)\n    parser.add_argument("--adjacent-sample", type=parse_non_negative_decimal)\n    parser.add_argument("--delta-sample", type=parse_non_negative_decimal)\n    return parser.parse_args()\n\n\ndef main():\n    args = parse_args()\n    path = args.path\n\n    with open(path, "rb") as handle:\n        data = handle.read()\n\n    report = build_report(\n        path,\n        data,\n        args.sample,\n        args.adjacent_sample,\n        args.delta_sample,\n    )\n    formatted_json = json.dumps(report, indent=2)\n    print(formatted_json)\n\n    if args.out is not None:\n        with open(args.out, "w") as handle:\n            handle.write(formatted_json + "\\n")\n\n\nif __name__ == "__main__":\n    main()\n'
+EQUATION = "q = P_{D(q)=Lambda}(rho_Lambda)"
 
 
 def read_lambda(path):
@@ -13,67 +13,53 @@ def read_lambda(path):
         return handle.read()
 
 
-def write_lambda(path, data):
+def write_bytes(path, data):
     with open(path, "wb") as handle:
         handle.write(data)
 
 
-def digest(data):
+def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def relation_intake():
-    return bytes((position * (position - 1)) // 2 for position in range(1, 17))
+def rho_lambda(lambda_bytes, position):
+    return lambda_bytes[position - 1]
 
 
-def relation_fill():
-    return bytes([65]) * 4096
+def derive_minimal_coordinate(lambda_bytes):
+    return {
+        "equation": EQUATION,
+        "length": len(lambda_bytes),
+        "rho": lambda position: rho_lambda(lambda_bytes, position),
+    }
 
 
-def relation_snapshot():
-    return SNAPSHOT_RELATION
+def coordinate_bytes(q):
+    return b""
 
 
-def decode_q(q):
-    if q == b"\x01":
-        return relation_intake()
-    if q == b"\x02":
-        return relation_fill()
-    if q == b"\x03":
-        return relation_snapshot()
-    raise ValueError("q is outside D")
+def decode_coordinate(q):
+    return bytes(q["rho"](position) for position in range(1, q["length"] + 1))
 
 
-def derive_q(data):
-    if data == relation_intake():
-        return b"\x01"
-    if data == relation_fill():
-        return b"\x02"
-    if data == relation_snapshot():
-        return b"\x03"
-    raise ValueError("rho is outside D")
-
-
-def rho(data, position):
-    return data[position - 1]
-
-
-def derive_g(data):
+def derive_g(q):
     return [
-        rho(data, position + 1) - rho(data, position)
-        for position in range(1, len(data))
+        q["rho"](position + 1) - q["rho"](position)
+        for position in range(1, q["length"])
     ]
 
 
-def derive_h(data):
+def derive_h(q):
     return [
-        rho(data, position + 2) - (2 * rho(data, position + 1)) + rho(data, position)
-        for position in range(1, max(1, len(data) - 1))
+        q["rho"](position + 2)
+        - (2 * q["rho"](position + 1))
+        + q["rho"](position)
+        for position in range(1, max(1, q["length"] - 1))
     ]
 
 
-def derive_angle_nodes(data):
-    h_values = derive_h(data)
+def derive_angle_nodes(q):
+    h_values = derive_h(q)
     return [
         {
             "position": position + 1,
@@ -83,49 +69,57 @@ def derive_angle_nodes(data):
     ]
 
 
-def proof_report(data, decoded):
-    return {
-        "D(q)=Lambda proof result": decoded == data,
-        "G proof result": derive_g(decoded) == derive_g(data),
-        "H proof result": derive_h(decoded) == derive_h(data),
-        "AngleNode proof result": derive_angle_nodes(decoded) == derive_angle_nodes(data),
-    }
-
-
-def size_ratio(q, data):
-    if len(data) == 0:
-        return None
-    return len(q) / len(data)
-
-
-def report(input_path, q_path, data, q, decoded):
-    exact_match = decoded == data
-    length_equal = len(decoded) == len(data)
-    sha_equal = digest(decoded) == digest(data)
-    smaller = len(q) < len(data)
+def q_report(input_path, q_path, lambda_bytes, q, decoded, q_surface):
+    exact_match = decoded == lambda_bytes
+    length_equal = len(decoded) == len(lambda_bytes)
+    sha_equal = sha256(decoded) == sha256(lambda_bytes)
+    smaller = len(q_surface) < len(lambda_bytes)
     closed = exact_match and length_equal and sha_equal and smaller
-    output = {
+    return {
         "input_path": str(input_path),
         "q_path": str(q_path),
-        "original_size": len(data),
-        "q_size": len(q),
-        "ratio": size_ratio(q, data),
-        "original_sha256": digest(data),
-        "q_sha256": digest(q),
-        "decoded_sha256": digest(decoded),
+        "original_size": len(lambda_bytes),
+        "q_size": len(q_surface),
+        "ratio": len(q_surface) / len(lambda_bytes) if len(lambda_bytes) != 0 else None,
+        "original_sha256": sha256(lambda_bytes),
+        "q_sha256": sha256(q_surface),
+        "decoded_sha256": sha256(decoded),
         "decoded_size": len(decoded),
         "exact_match": exact_match,
         "length_equal": length_equal,
         "sha_equal": sha_equal,
         "q_size < original_size": smaller,
         "relation": {
-            "q": "rho_Lambda",
+            "Lambda": "complete ordered byte carrier",
+            "P_i": "i",
+            "rho_Lambda(P_i)": "Lambda_i",
+            "q": EQUATION,
             "D(q)": "Lambda",
         },
-        "status": "CLOSED" if closed else "OPEN",
+        "D(q)=Lambda proof result": exact_match,
+        "G proof result": derive_g(q) == derive_g(derive_minimal_coordinate(decoded)),
+        "H proof result": derive_h(q) == derive_h(derive_minimal_coordinate(decoded)),
+        "AngleNode proof result": derive_angle_nodes(q)
+        == derive_angle_nodes(derive_minimal_coordinate(decoded)),
+        "status": "CLOSED" if closed else "FAILED",
     }
-    output.update(proof_report(data, decoded))
-    return output
+
+
+def unpack_report(input_path, output_path, q_surface):
+    return {
+        "input_path": str(input_path),
+        "output_path": str(output_path),
+        "q_size": len(q_surface),
+        "q_sha256": sha256(q_surface),
+        "decoded_size": None,
+        "decoded_sha256": None,
+        "status": "FAILED",
+        "failure_class": "ACTIVE_RHO_LAMBDA_ABSENT",
+        "relation": {
+            "q": EQUATION,
+            "D(q)": "requires active rho_Lambda",
+        },
+    }
 
 
 def print_json(value):
@@ -134,62 +128,66 @@ def print_json(value):
 
 def pack_action(args):
     input_path = Path(args.input_path)
-    q_path = Path(args.output_q_path)
-    data = read_lambda(input_path)
-    q = derive_q(data)
-    decoded = decode_q(q)
-    write_lambda(q_path, q)
-    output = report(input_path, q_path, data, q, decoded)
-    print_json(output)
-    return 0 if output["status"] == "CLOSED" else 1
+    q_path = Path(args.output_bac_path)
+    lambda_bytes = read_lambda(input_path)
+    q = derive_minimal_coordinate(lambda_bytes)
+    decoded = decode_coordinate(q)
+    q_surface = coordinate_bytes(q)
+    write_bytes(q_path, q_surface)
+    report = q_report(input_path, q_path, lambda_bytes, q, decoded, q_surface)
+    print_json(report)
+    return 0 if report["status"] == "CLOSED" else 1
 
 
 def unpack_action(args):
-    input_path = Path(args.input_q_path)
+    input_path = Path(args.input_bac_path)
     output_path = Path(args.output_path)
-    q = read_lambda(input_path)
-    decoded = decode_q(q)
-    write_lambda(output_path, decoded)
-    output = report(input_path, output_path, decoded, q, decoded)
-    print_json(output)
-    return 0 if output["status"] == "CLOSED" else 1
+    q_surface = read_lambda(input_path)
+    report = unpack_report(input_path, output_path, q_surface)
+    print_json(report)
+    return 1
 
 
 def verify_action(args):
     input_path = Path(args.input_path)
-    q_path = Path(args.input_q_path)
-    data = read_lambda(input_path)
-    q = read_lambda(q_path)
-    decoded = decode_q(q)
-    output = report(input_path, q_path, data, q, decoded)
-    print_json(output)
-    return 0 if output["status"] == "CLOSED" else 1
+    q_path = Path(args.input_bac_path)
+    lambda_bytes = read_lambda(input_path)
+    q_surface = read_lambda(q_path)
+    q = derive_minimal_coordinate(lambda_bytes)
+    expected_q_surface = coordinate_bytes(q)
+    decoded = decode_coordinate(q)
+    report = q_report(input_path, q_path, lambda_bytes, q, decoded, q_surface)
+    report["q_surface_equal"] = q_surface == expected_q_surface
+    if not report["q_surface_equal"]:
+        report["status"] = "FAILED"
+    print_json(report)
+    return 0 if report["status"] == "CLOSED" else 1
 
 
-def parser():
-    root = argparse.ArgumentParser()
-    actions = root.add_subparsers(dest="action", required=True)
+def build_parser():
+    parser = argparse.ArgumentParser()
+    commands = parser.add_subparsers(dest="command", required=True)
 
-    pack = actions.add_parser("pack")
+    pack = commands.add_parser("pack")
     pack.add_argument("input_path")
-    pack.add_argument("output_q_path")
+    pack.add_argument("output_bac_path")
     pack.set_defaults(run=pack_action)
 
-    unpack = actions.add_parser("unpack")
-    unpack.add_argument("input_q_path")
+    unpack = commands.add_parser("unpack")
+    unpack.add_argument("input_bac_path")
     unpack.add_argument("output_path")
     unpack.set_defaults(run=unpack_action)
 
-    verify = actions.add_parser("verify")
+    verify = commands.add_parser("verify")
     verify.add_argument("input_path")
-    verify.add_argument("input_q_path")
+    verify.add_argument("input_bac_path")
     verify.set_defaults(run=verify_action)
 
-    return root
+    return parser
 
 
 def main():
-    args = parser().parse_args()
+    args = build_parser().parse_args()
     return args.run(args)
 
 
