@@ -27,3 +27,7 @@ def bit_states_to_byte(bits: tuple[int, ...]) -> int:
             raise ValueError("bit state must be 0 or 1")
         value = (value << 1) | bit
     return value
+
+
+def byte_carrier_to_bit_states(carrier: bytes) -> tuple[tuple[int, ...], ...]:
+    return tuple(byte_to_bit_states(value) for value in carrier)
