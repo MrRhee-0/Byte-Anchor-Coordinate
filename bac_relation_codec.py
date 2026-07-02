@@ -37,3 +37,9 @@ def bit_states_to_byte_carrier(
     bit_state_carrier: tuple[tuple[int, ...], ...]
 ) -> bytes:
     return bytes(bit_states_to_byte(bits) for bits in bit_state_carrier)
+
+
+def flatten_bit_state_carrier(
+    bit_state_carrier: tuple[tuple[int, ...], ...]
+) -> tuple[int, ...]:
+    return tuple(bit for byte_bits in bit_state_carrier for bit in byte_bits)
