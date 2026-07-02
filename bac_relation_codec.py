@@ -82,3 +82,9 @@ def unpack_bytes_to_flat_bits(packed: bytes, padding: int) -> tuple[int, ...]:
     if any(bit != 0 for bit in flat_bits[-padding:]):
         raise ValueError("padding bits must be 0")
     return flat_bits[:-padding]
+
+
+def uint_bit_width(value: int) -> int:
+    if value < 0:
+        raise ValueError("uint value must be greater than or equal to 0")
+    return max(1, value.bit_length())
