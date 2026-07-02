@@ -43,3 +43,17 @@ def flatten_bit_state_carrier(
     bit_state_carrier: tuple[tuple[int, ...], ...]
 ) -> tuple[int, ...]:
     return tuple(bit for byte_bits in bit_state_carrier for bit in byte_bits)
+
+
+def unflatten_bit_state_carrier(
+    flat_bits: tuple[int, ...]
+) -> tuple[tuple[int, ...], ...]:
+    if len(flat_bits) % 8 != 0:
+        raise ValueError("flat bit-state carrier length must be divisible by 8")
+    for bit in flat_bits:
+        if bit not in (0, 1):
+            raise ValueError("bit state must be 0 or 1")
+    return tuple(
+        tuple(flat_bits[offset : offset + 8])
+        for offset in range(0, len(flat_bits), 8)
+    )
