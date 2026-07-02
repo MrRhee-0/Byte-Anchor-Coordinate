@@ -69,3 +69,16 @@ def pack_flat_bits_to_bytes(flat_bits: tuple[int, ...]) -> tuple[bytes, int]:
     for offset in range(0, len(padded_bits), 8):
         values.append(bit_states_to_byte(tuple(padded_bits[offset : offset + 8])))
     return bytes(values), padding
+
+
+def unpack_bytes_to_flat_bits(packed: bytes, padding: int) -> tuple[int, ...]:
+    if padding < 0 or padding > 7:
+        raise ValueError("padding must be in [0, 7]")
+    flat_bits = flatten_bit_state_carrier(byte_carrier_to_bit_states(packed))
+    if padding == 0:
+        return flat_bits
+    if len(flat_bits) < padding:
+        raise ValueError("padding exceeds flat bit-state length")
+    if any(bit != 0 for bit in flat_bits[-padding:]):
+        raise ValueError("padding bits must be 0")
+    return flat_bits[:-padding]
