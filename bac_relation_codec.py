@@ -57,3 +57,15 @@ def unflatten_bit_state_carrier(
         tuple(flat_bits[offset : offset + 8])
         for offset in range(0, len(flat_bits), 8)
     )
+
+
+def pack_flat_bits_to_bytes(flat_bits: tuple[int, ...]) -> tuple[bytes, int]:
+    for bit in flat_bits:
+        if bit not in (0, 1):
+            raise ValueError("bit state must be 0 or 1")
+    padding = (-len(flat_bits)) % 8
+    padded_bits = flat_bits + ((0,) * padding)
+    values = []
+    for offset in range(0, len(padded_bits), 8):
+        values.append(bit_states_to_byte(tuple(padded_bits[offset : offset + 8])))
+    return bytes(values), padding
