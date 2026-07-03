@@ -234,3 +234,16 @@ def byte_carrier_to_widths_and_payload(
 
 def byte_carrier_count_bit_states(carrier: bytes) -> tuple[int, ...]:
     return uint_to_minimal_bit_states(byte_quantity(carrier))
+
+
+def resolve_bac_coordinate_components(
+    carrier: bytes,
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    count_bits = byte_carrier_count_bit_states(carrier)
+
+    widths, payload_bits = byte_carrier_to_widths_and_payload(carrier)
+
+    codes = uint_bit_widths_to_codes(widths)
+    code_bits = uint_bit_width_codes_to_bit_states(codes)
+
+    return count_bits, code_bits, payload_bits
