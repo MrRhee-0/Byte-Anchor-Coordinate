@@ -88,3 +88,8 @@ def uint_bit_width(value: int) -> int:
     if value < 0:
         raise ValueError("uint value must be greater than or equal to 0")
     return max(1, value.bit_length())
+
+
+def uint_to_minimal_bit_states(value: int) -> tuple[int, ...]:
+    width = uint_bit_width(value)
+    return tuple((value >> shift) & 1 for shift in range(width - 1, -1, -1))
