@@ -210,3 +210,14 @@ def unflatten_minimal_uint_bit_state_carrier(
         offset += width
 
     return tuple(members)
+
+
+def reconstruct_byte_carrier_from_widths_and_payload(
+    widths: tuple[int, ...],
+    payload_bits: tuple[int, ...],
+) -> bytes:
+    minimal_carrier = unflatten_minimal_uint_bit_state_carrier(
+        payload_bits,
+        widths,
+    )
+    return minimal_uint_bit_states_to_byte_carrier(minimal_carrier)
