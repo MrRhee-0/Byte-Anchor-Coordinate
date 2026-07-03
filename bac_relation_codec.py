@@ -128,3 +128,12 @@ def minimal_uint_bit_states_to_byte_carrier(
 
 def byte_carrier_uint_bit_widths(carrier: bytes) -> tuple[int, ...]:
     return tuple(uint_bit_width(value) for value in carrier)
+
+
+def uint_bit_widths_to_codes(widths: tuple[int, ...]) -> tuple[int, ...]:
+    codes = []
+    for width in widths:
+        if width < 1 or width > 8:
+            raise ValueError("uint bit width for a byte must be in [1, 8]")
+        codes.append(width - 1)
+    return tuple(codes)
