@@ -170,3 +170,17 @@ def bit_states_to_uint_bit_width_codes(code_bits: tuple[int, ...]) -> tuple[int,
                 raise ValueError("bit state must be 0 or 1")
         codes.append((bit_2 << 2) | (bit_1 << 1) | bit_0)
     return tuple(codes)
+
+
+def flatten_minimal_uint_bit_state_carrier(
+    minimal_carrier: tuple[tuple[int, ...], ...]
+) -> tuple[int, ...]:
+    bits = []
+    for member_bits in minimal_carrier:
+        if len(member_bits) == 0:
+            raise ValueError("minimal uint bit-state member must not be empty")
+        for bit in member_bits:
+            if bit not in (0, 1):
+                raise ValueError("bit state must be 0 or 1")
+            bits.append(bit)
+    return tuple(bits)
