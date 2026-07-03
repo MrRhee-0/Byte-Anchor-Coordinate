@@ -230,3 +230,7 @@ def byte_carrier_to_widths_and_payload(
     minimal_carrier = byte_carrier_to_minimal_uint_bit_states(carrier)
     payload_bits = flatten_minimal_uint_bit_state_carrier(minimal_carrier)
     return widths, payload_bits
+
+
+def byte_carrier_count_bit_states(carrier: bytes) -> tuple[int, ...]:
+    return uint_to_minimal_bit_states(byte_quantity(carrier))
