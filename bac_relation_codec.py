@@ -155,3 +155,18 @@ def uint_bit_width_codes_to_bit_states(codes: tuple[int, ...]) -> tuple[int, ...
             raise ValueError("uint bit width code for a byte must be in [0, 7]")
         bits.extend(((code >> 2) & 1, (code >> 1) & 1, code & 1))
     return tuple(bits)
+
+
+def bit_states_to_uint_bit_width_codes(code_bits: tuple[int, ...]) -> tuple[int, ...]:
+    if len(code_bits) % 3 != 0:
+        raise ValueError("width-code bit-state carrier length must be divisible by 3")
+    codes = []
+    for offset in range(0, len(code_bits), 3):
+        bit_2 = code_bits[offset]
+        bit_1 = code_bits[offset + 1]
+        bit_0 = code_bits[offset + 2]
+        for bit in (bit_2, bit_1, bit_0):
+            if bit not in (0, 1):
+                raise ValueError("bit state must be 0 or 1")
+        codes.append((bit_2 << 2) | (bit_1 << 1) | bit_0)
+    return tuple(codes)
