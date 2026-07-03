@@ -98,10 +98,14 @@ def uint_to_minimal_bit_states(value: int) -> tuple[int, ...]:
 def minimal_bit_states_to_uint(bits: tuple[int, ...]) -> int:
     if len(bits) == 0:
         raise ValueError("uint bit-state carrier must not be empty")
-    value = 0
     for bit in bits:
         if bit not in (0, 1):
             raise ValueError("bit state must be 0 or 1")
+    if len(bits) > 1 and bits[0] == 0:
+        raise ValueError("minimal uint bit-state carrier must not have leading zero burden")
+
+    value = 0
+    for bit in bits:
         value = (value << 1) | bit
     return value
 
