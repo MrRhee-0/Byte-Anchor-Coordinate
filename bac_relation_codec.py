@@ -137,3 +137,12 @@ def uint_bit_widths_to_codes(widths: tuple[int, ...]) -> tuple[int, ...]:
             raise ValueError("uint bit width for a byte must be in [1, 8]")
         codes.append(width - 1)
     return tuple(codes)
+
+
+def uint_bit_width_codes_to_widths(codes: tuple[int, ...]) -> tuple[int, ...]:
+    widths = []
+    for code in codes:
+        if code < 0 or code > 7:
+            raise ValueError("uint bit width code for a byte must be in [0, 7]")
+        widths.append(code + 1)
+    return tuple(widths)
