@@ -184,3 +184,29 @@ def flatten_minimal_uint_bit_state_carrier(
                 raise ValueError("bit state must be 0 or 1")
             bits.append(bit)
     return tuple(bits)
+
+
+def unflatten_minimal_uint_bit_state_carrier(
+    payload_bits: tuple[int, ...],
+    widths: tuple[int, ...],
+) -> tuple[tuple[int, ...], ...]:
+    expected_length = 0
+    for width in widths:
+        if width < 1 or width > 8:
+            raise ValueError("uint bit width for a byte must be in [1, 8]")
+        expected_length += width
+
+    if len(payload_bits) != expected_length:
+        raise ValueError("payload bit-state length does not match widths")
+
+    for bit in payload_bits:
+        if bit not in (0, 1):
+            raise ValueError("bit state must be 0 or 1")
+
+    members = []
+    offset = 0
+    for width in widths:
+        members.append(tuple(payload_bits[offset : offset + width]))
+        offset += width
+
+    return tuple(members)
