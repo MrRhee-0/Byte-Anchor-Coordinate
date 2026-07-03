@@ -12,6 +12,21 @@ def byte_quantity(carrier: bytes) -> int:
     return len(carrier)
 
 
+def resolve_q_byte_quantity_from_tct_compression_constraint(
+    carrier: bytes,
+    delta_B: int,
+) -> int:
+    if delta_B < 1:
+        raise ValueError("δ_B must be in ℕ⁺")
+    carrier_len_B = byte_quantity(carrier)
+    q_len_B = carrier_len_B - delta_B
+    if q_len_B < 0:
+        raise ValueError("TCT_compression_constraint resolves negative |q|_B")
+    if q_len_B + delta_B != carrier_len_B:
+        raise ValueError("|q|_B + δ_B != |Λ_B|_B")
+    return q_len_B
+
+
 def byte_to_bit_states(value: int) -> tuple[int, ...]:
     if value < 0 or value > 255:
         raise ValueError("byte value must be in [0, 255]")
