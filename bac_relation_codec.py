@@ -221,3 +221,12 @@ def reconstruct_byte_carrier_from_widths_and_payload(
         widths,
     )
     return minimal_uint_bit_states_to_byte_carrier(minimal_carrier)
+
+
+def byte_carrier_to_widths_and_payload(
+    carrier: bytes,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    widths = byte_carrier_uint_bit_widths(carrier)
+    minimal_carrier = byte_carrier_to_minimal_uint_bit_states(carrier)
+    payload_bits = flatten_minimal_uint_bit_state_carrier(minimal_carrier)
+    return widths, payload_bits
