@@ -124,3 +124,7 @@ def minimal_uint_bit_states_to_byte_carrier(
             raise ValueError("uint bit-state carrier must be minimal")
         values.append(value)
     return bytes(values)
+
+
+def byte_carrier_uint_bit_widths(carrier: bytes) -> tuple[int, ...]:
+    return tuple(uint_bit_width(value) for value in carrier)
