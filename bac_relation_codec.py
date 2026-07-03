@@ -267,3 +267,17 @@ def resolve_delta_B_from_tct_compression_constraint(
     if q_len_B + delta_B != carrier_len_B:
         raise ValueError("|q|_B + δ_B != |Λ_B|_B")
     return delta_B
+
+
+def tct_compression_constraint(
+    q: bytes,
+    carrier: bytes,
+    delta_B: int,
+) -> tuple[int, int, int]:
+    if delta_B < 1:
+        raise ValueError("δ_B must be in ℕ⁺")
+    q_len_B = byte_quantity(q)
+    carrier_len_B = byte_quantity(carrier)
+    if q_len_B + delta_B != carrier_len_B:
+        raise ValueError("|q|_B + δ_B != |Λ_B|_B")
+    return q_len_B, carrier_len_B, delta_B
