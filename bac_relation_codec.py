@@ -93,3 +93,14 @@ def uint_bit_width(value: int) -> int:
 def uint_to_minimal_bit_states(value: int) -> tuple[int, ...]:
     width = uint_bit_width(value)
     return tuple((value >> shift) & 1 for shift in range(width - 1, -1, -1))
+
+
+def minimal_bit_states_to_uint(bits: tuple[int, ...]) -> int:
+    if len(bits) == 0:
+        raise ValueError("uint bit-state carrier must not be empty")
+    value = 0
+    for bit in bits:
+        if bit not in (0, 1):
+            raise ValueError("bit state must be 0 or 1")
+        value = (value << 1) | bit
+    return value
